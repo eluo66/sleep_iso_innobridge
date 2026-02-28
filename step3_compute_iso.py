@@ -8,7 +8,7 @@ from compute_iso import get_iso
     
 
 
-def get_path(bids_folder, session):
+def get_path(bids_folder, session, known_annot_path=None):
     tmp_folder = 'local_tmp'
     os.makedirs(tmp_folder, exist_ok=True)
 
@@ -21,10 +21,14 @@ def get_path(bids_folder, session):
         subprocess.run(cmd)
 
     # download annotation file
-    annot_path = os.path.join(tmp_folder, f'{bids_folder}_ses-{session}_task-psg_annotations.csv')
+    if known_annot_path is None:
+        annot_fn = f'{bids_folder}_ses-{session}_task-psg_annotations.csv'
+    else:
+        annot_fn = os.path.basename(known_annot_path)
+    annot_path = os.path.join(tmp_folder, annot_fn)
     if not os.path.exists(annot_path):
         cmd = ['aws', 's3', 'cp',
-        f's3://arn:aws:s3:us-east-1:184438910517:accesspoint/bdsp-psg-access-point/PSG/bids/S0001/{bids_folder}/ses-{session}/eeg/{bids_folder}_ses-{session}_task-psg_annotations.csv',
+        f's3://arn:aws:s3:us-east-1:184438910517:accesspoint/bdsp-psg-access-point/PSG/bids/S0001/{bids_folder}/ses-{session}/eeg/{annot_fn}',
         annot_path]
         subprocess.run(cmd)
 
@@ -32,7 +36,8 @@ def get_path(bids_folder, session):
 
 
 def main():
-    df = pd.read_excel('mastersheet-full.xlsx')
+    #df = pd.read_excel('mastersheet-full.xlsx')
+    df = pd.read_csv('mastersheet_v2_for_sciencefair.csv')
     base_dir = '.'
 
     output_dir = 'result'
@@ -45,12 +50,19 @@ def main():
     ch_groups = [['F3M2', 'F4M1'], ['C3M2', 'C4M1'], ['O1M2', 'O2M1']]
     ch_group_names =['Frontal', 'Central', 'Occipital'] #EEG channels are grouped into frontal, central, and occipital regions for regional analysis
 
+    df_paths = pd.read_csv('/data/haoqisun/dataset_HSP/all_annot_paths.csv')
+
     all_results = []
     for i in tqdm(range(len(df))): #loops through each person (row in the mastersheet)
         try:
             sid = f'{df.SiteID.iloc[i]}-{df.BDSPPatientID.iloc[i]}-{df.SessionID.iloc[i]}'
+            df_path_ = df_paths[(df_paths.SiteID==df.SiteID.iloc[i])&(df_paths.BDSPPatientID==df.BDSPPatientID.iloc[i])&(df_paths.SessionID==df.SessionID.iloc[i])]
+            if len(df_path_)==1:
+                known_annot_path = df_path_.AnnotSS.iloc[0]
+            else:
+                known_annot_path = None
 
-            edf_path, annot_path = get_path(df.BidsFolder.iloc[i], df.SessionID.iloc[i])
+            edf_path, annot_path = get_path(df.BidsFolder.iloc[i], df.SessionID.iloc[i], known_annot_path=known_annot_path)
 
             # add sleep stages
             # 5 W
@@ -58,7 +70,6 @@ def main():
             # 3 N1
             # 2 N2
             # 1 N3
-
             sleep_stages = pd.read_csv(annot_path)
             # filter only events starting with Sleep_stage_
             sleep_stages = sleep_stages.event[sleep_stages.event.str.startswith('Sleep_stage_')]
@@ -116,9 +127,10 @@ def main():
             res['SID'] = sid
             all_results.append(res)
         
-            all_results_now = pd.DataFrame(data=all_results)
-            print(all_results_now)
-            all_results_now.to_csv(os.path.join(output_dir, 'ISO_features.csv'), index=False)
+            if i%10==9 or i==len(df)-1:
+                all_results_now = pd.DataFrame(data=all_results)
+                print(all_results_now)
+                all_results_now.to_csv(os.path.join(output_dir, 'ISO_features.csv'), index=False)
 
             # to save disk space
             if os.path.exists(edf_path):
@@ -127,7 +139,6 @@ def main():
                 os.remove(annot_path)
         except Exception as e:
             print(f'{sid}: ERROR {e}')
-
 
 
 
